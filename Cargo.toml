@@ -1,0 +1,29 @@
+[workspace]
+resolver = "2"
+members = [
+    "pdfx-cli",
+    "pdfx-core",
+    "pdfx-pdf",
+    "pdfx-deflate",
+    "pdfx-jpeg",
+    "pdfx-percept",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+rust-version = "1.80"
+
+[workspace.dependencies]
+pdfx-core = { path = "pdfx-core" }
+pdfx-pdf = { path = "pdfx-pdf" }
+pdfx-deflate = { path = "pdfx-deflate" }
+pdfx-jpeg = { path = "pdfx-jpeg" }
+pdfx-percept = { path = "pdfx-percept" }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+flate2 = "1"
+lopdf = "0.38"
+thiserror = "2"
+zune-jpeg = "0.4"

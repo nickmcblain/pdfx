@@ -1,0 +1,9 @@
+[package]
+name = "pdfx-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pdfx-pdf.workspace = true
+thiserror.workspace = true

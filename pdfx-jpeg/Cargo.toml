@@ -1,0 +1,11 @@
+[package]
+name = "pdfx-jpeg"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+pdfx-percept.workspace = true
+zune-jpeg.workspace = true

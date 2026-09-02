@@ -1,0 +1,13 @@
+[package]
+name = "pdfx-pdf"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lopdf.workspace = true
+pdfx-deflate.workspace = true
+pdfx-jpeg.workspace = true
+pdfx-percept.workspace = true
+thiserror.workspace = true
+zune-jpeg.workspace = true
