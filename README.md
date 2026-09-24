@@ -21,9 +21,10 @@ Needs Rust 1.80+.
 ```bash
 pdfx inspect deck.pdf
 pdfx compress deck.pdf -o out.pdf --report
+pdfx form application.pdf -o application.form.pdf
 ```
 
-No `-o` writes `deck.pdfx.pdf` next to the input.
+No `-o` on `compress` writes `deck.pdfx.pdf` next to the input. No `-o` on `form` writes `application.form.pdf`.
 
 `--report` prints input and output sizes plus a one-line tally (orphans removed, images rewritten, duplicates dropped). If nothing got smaller you still get a file, and the report says `kept original`.
 
@@ -35,6 +36,16 @@ RGB images that decode (raw or JPEG) get a single 4:2:0 JPEG pass. Soft masks st
 
 Page content streams that are already Flate stay put. An earlier pass re-encoded failed inflates as empty zlib and wiped whole slides. That is why we skip `FlateDecode` on non-image streams.
 
+## Form fields
+
+`pdfx form` does what Acrobat Pro's Prepare Form does to a flat page: it finds empty slots and drops real AcroForm widgets on them.
+
+It looks at the content stream, not a render. A run of underscores, a horizontal rule next to a label, an empty rectangle, or a small stroked square becomes a field. The name comes from the text on the left or above (`Name: ________` → `Name`). Slots with no caption are `Text1`, `Check1`, and so on. A second run leaves fields that are already there.
+
+Text fields are `/FT /Tx`. Checkboxes are `/FT /Btn` with off-state `/Off` and on-state `/Yes`. The file sets `/NeedAppearances` so a viewer draws typed text. Filling is just setting `/V` on the widget (a PDF string for text, the name `/Yes` for a check).
+
+Page frames, emphasis underlines, and boxes that already contain text are left alone. Encrypted files are refused.
+
 ## What it will not do
 
 It will not beat a file that is already mid-quality 4:2:0 JPEG unless we downsample. It will not touch JBIG2 or JPEG 2000. It will not decrypt anything.
@@ -44,7 +55,7 @@ It will not beat a file that is already mid-quality 4:2:0 JPEG unless we downsam
 | Crate | Role |
 | --- | --- |
 | `pdfx-cli` | clap binary |
-| `pdfx-core` | inspect / compress entry |
+| `pdfx-core` | inspect / compress / form entry |
 | `pdfx-pdf` | object graph, images, save |
 | `pdfx-deflate` | zlib-wrapped DEFLATE |
 | `pdfx-jpeg` | baseline SOF0 JPEG |

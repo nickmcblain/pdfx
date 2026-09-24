@@ -1,5 +1,6 @@
 //! PDF object-graph walks and rewrite passes (lopdf is parse/write only).
 
+mod forms;
 mod images;
 mod predictor;
 mod resample;
@@ -7,6 +8,7 @@ mod structure;
 
 use thiserror::Error;
 
+pub use forms::{prepare_form, AddedField, FieldKind, FormStats};
 pub use images::ImageStats;
 pub use structure::{census, compress_document, Census};
 

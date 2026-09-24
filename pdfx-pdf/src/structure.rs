@@ -84,7 +84,7 @@ pub fn compress_document(bytes: &[u8]) -> Result<(Vec<u8>, CompressStats)> {
     Ok((out, stats))
 }
 
-fn load(bytes: &[u8]) -> Result<Document> {
+pub(crate) fn load(bytes: &[u8]) -> Result<Document> {
     let doc = Document::load_from(Cursor::new(bytes))?;
     if doc.is_encrypted() {
         return Err(PdfError::Encrypted);
@@ -92,7 +92,7 @@ fn load(bytes: &[u8]) -> Result<Document> {
     Ok(doc)
 }
 
-fn save_doc(doc: &mut Document) -> Result<Vec<u8>> {
+pub(crate) fn save_doc(doc: &mut Document) -> Result<Vec<u8>> {
     // Gaps from prune/dedup + xref/object streams break macOS Preview.
     doc.renumber_objects();
     doc.reference_table.cross_reference_type = XrefType::CrossReferenceTable;
