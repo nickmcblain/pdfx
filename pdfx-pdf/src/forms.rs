@@ -171,6 +171,13 @@ struct TextRun {
     w: f64,
     size: f64,
     up: f64,
+    checkbox: bool,
+}
+
+impl TextRun {
+    fn is_caption(&self) -> bool {
+        !self.checkbox && !bad_label_text(&self.text) && !underscore_slot(&self.text)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -186,6 +193,32 @@ enum Face {
     Times,
     Courier,
     Generic,
+}
+
+#[derive(Clone, Copy)]
+struct FontInfo {
+    face: Face,
+    boxes: BoxMask,
+}
+
+/// Which single-byte character codes in this font are checkbox glyphs.
+#[derive(Clone, Copy)]
+struct BoxMask([u64; 4]);
+
+impl BoxMask {
+    fn none() -> Self {
+        Self([0; 4])
+    }
+
+    fn set(&mut self, byte: u8) {
+        let i = (byte / 64) as usize;
+        self.0[i] |= 1_u64 << (byte % 64);
+    }
+
+    fn has(self, byte: u8) -> bool {
+        let i = (byte / 64) as usize;
+        self.0[i] & (1_u64 << (byte % 64)) != 0
+    }
 }
 
 type Mat = [f64; 6];
@@ -204,6 +237,7 @@ struct GState {
     line_width: f64,
     stroke_invisible: bool,
     fill_light: bool,
+    boxes: BoxMask,
 }
 
 impl GState {
@@ -211,6 +245,7 @@ impl GState {
         Self {
             ctm,
             face: Face::Generic,
+            boxes: BoxMask::none(),
             font_size: 12.0,
             leading: 0.0,
             hscale: 100.0,
@@ -306,6 +341,36 @@ fn propose(
             page: page_no,
             page_id,
             kind: FieldKind::Text,
+            rect,
+            name,
+        });
+    }
+
+    for run in &marks.texts {
+        if !run.checkbox {
+            continue;
+        }
+        let side = run.size.clamp(8.0, 14.0);
+        let rect = if run.up >= 0.0 {
+            [run.x, run.y, run.x + side, run.y + side]
+        } else {
+            [run.x, run.y - side, run.x + side, run.y]
+        };
+        let Some(rect) = clamp_rect(rect, *page, 6.0) else {
+            continue;
+        };
+        if !page.holds(rect) || blocked.iter().any(|b| overlaps(rect, *b)) {
+            continue;
+        }
+        let name = label_beside(&marks.texts, rect, true)
+            .or_else(|| label_beside(&marks.texts, rect, false))
+            .or_else(|| label_above(&marks.texts, rect))
+            .unwrap_or_default();
+        blocked.push(rect);
+        out.push(Slot {
+            page: page_no,
+            page_id,
+            kind: FieldKind::Checkbox,
             rect,
             name,
         });
@@ -425,7 +490,7 @@ fn underscore_rect(run: &TextRun) -> [f64; 4] {
 
 fn contains_text(texts: &[TextRun], rect: [f64; 4]) -> bool {
     texts.iter().any(|run| {
-        if bad_label_text(&run.text) || underscore_slot(&run.text) {
+        if !run.is_caption() {
             return false;
         }
         let cx = run.x + run.w * 0.5;
@@ -470,7 +535,7 @@ fn nearby_size(texts: &[TextRun], line: &HLine) -> f64 {
 fn label_left(texts: &[TextRun], llx: f64, anchor_y: f64) -> Option<String> {
     let mut best: Option<(usize, f64)> = None;
     for (i, run) in texts.iter().enumerate() {
-        if bad_label_text(&run.text) || underscore_slot(&run.text) {
+        if !run.is_caption() {
             continue;
         }
         let gap = llx - (run.x + run.w);
@@ -492,7 +557,7 @@ fn label_beside(texts: &[TextRun], rect: [f64; 4], right: bool) -> Option<String
     let mid = (rect[1] + rect[3]) * 0.5;
     let mut best: Option<(usize, f64)> = None;
     for (i, run) in texts.iter().enumerate() {
-        if bad_label_text(&run.text) || underscore_slot(&run.text) {
+        if !run.is_caption() {
             continue;
         }
         let run_mid = run.y + run.up.signum() * run.size * 0.3;
@@ -518,7 +583,7 @@ fn label_beside(texts: &[TextRun], rect: [f64; 4], right: bool) -> Option<String
 fn label_above(texts: &[TextRun], rect: [f64; 4]) -> Option<String> {
     let mut best: Option<(usize, f64)> = None;
     for (i, run) in texts.iter().enumerate() {
-        if bad_label_text(&run.text) || underscore_slot(&run.text) {
+        if !run.is_caption() {
             continue;
         }
         let dy = run.y - rect[3];
@@ -540,7 +605,7 @@ fn label_above(texts: &[TextRun], rect: [f64; 4]) -> Option<String> {
 fn label_above_line(texts: &[TextRun], line: &HLine) -> Option<String> {
     let mut best: Option<(usize, f64)> = None;
     for (i, run) in texts.iter().enumerate() {
-        if bad_label_text(&run.text) || underscore_slot(&run.text) {
+        if !run.is_caption() {
             continue;
         }
         let dy = run.y - line.y;
@@ -566,7 +631,11 @@ fn cluster(texts: &[TextRun], seed: usize) -> String {
     while grew {
         grew = false;
         for (i, run) in texts.iter().enumerate() {
-            if idx.contains(&i) || underscore_slot(&run.text) || run.text.trim().is_empty() {
+            if idx.contains(&i)
+                || run.checkbox
+                || underscore_slot(&run.text)
+                || run.text.trim().is_empty()
+            {
                 continue;
             }
             if (run.y - seed_y).abs() > (seed_size * 0.45).max(3.5) {
@@ -724,7 +793,7 @@ fn grid_border(line: &HLine, segs: &[Seg]) -> bool {
 fn gaps_on_line(line: &HLine, texts: &[TextRun]) -> Vec<HLine> {
     let mut cuts: Vec<(f64, f64)> = Vec::new();
     for run in texts {
-        if run.w < 1.0 || bad_label_text(&run.text) {
+        if run.w < 1.0 || run.checkbox || bad_label_text(&run.text) {
             continue;
         }
         let dy = run.y - line.y;
@@ -982,7 +1051,7 @@ fn interpret(
     data: &[u8],
     ctm: Mat,
     xobjects: &HashMap<Vec<u8>, ObjectId>,
-    fonts: &HashMap<Vec<u8>, Face>,
+    fonts: &HashMap<Vec<u8>, FontInfo>,
     marks: &mut Marks,
     depth: u32,
     seen: &mut HashSet<ObjectId>,
@@ -1122,7 +1191,16 @@ fn interpret(
             }
             "Tf" => {
                 if let Some(name) = op.operands.first().and_then(|o| o.as_name().ok()) {
-                    gs.face = fonts.get(name).copied().unwrap_or(Face::Generic);
+                    match fonts.get(name).copied() {
+                        Some(info) => {
+                            gs.face = info.face;
+                            gs.boxes = info.boxes;
+                        }
+                        None => {
+                            gs.face = Face::Generic;
+                            gs.boxes = BoxMask::none();
+                        }
+                    }
                 }
                 if let Some(size) = nth_num(&op.operands, 1) {
                     gs.font_size = size.abs().max(0.1);
@@ -1310,7 +1388,7 @@ fn rect_to(path: &mut Path, ctm: Mat, x: f64, y: f64, w: f64, h: f64) {
 }
 
 fn emit_string(marks: &mut Marks, gs: &GState, tm: &mut Mat, raw: &[u8]) {
-    let text = pdf_to_string(raw);
+    let text = decode_show(raw, gs);
     if text.is_empty() {
         return;
     }
@@ -1324,16 +1402,25 @@ fn emit_string(marks: &mut Marks, gs: &GState, tm: &mut Mat, raw: &[u8]) {
     let mut buf = String::new();
     let mut in_under: Option<bool> = None;
     for ch in text.chars() {
+        if is_box_char(ch) {
+            if !buf.is_empty() {
+                flush_run(marks, gs, tm, &buf, horizontal, size, up, false);
+                buf.clear();
+                in_under = None;
+            }
+            flush_run(marks, gs, tm, &ch.to_string(), horizontal, size, up, true);
+            continue;
+        }
         let under = ch == '_';
         if in_under.map(|flag| flag != under).unwrap_or(false) {
-            flush_run(marks, gs, tm, &buf, horizontal, size, up);
+            flush_run(marks, gs, tm, &buf, horizontal, size, up, false);
             buf.clear();
         }
         in_under = Some(under);
         buf.push(ch);
     }
     if !buf.is_empty() {
-        flush_run(marks, gs, tm, &buf, horizontal, size, up);
+        flush_run(marks, gs, tm, &buf, horizontal, size, up, false);
     }
 }
 
@@ -1345,6 +1432,7 @@ fn flush_run(
     horizontal: bool,
     size: f64,
     up: f64,
+    checkbox: bool,
 ) {
     let tx = displacement(text, gs);
     if horizontal && !text.is_empty() {
@@ -1358,6 +1446,7 @@ fn flush_run(
             w: (x1 - x0).abs(),
             size,
             up,
+            checkbox,
         });
     }
     *tm = mul([1.0, 0.0, 0.0, 1.0, tx, 0.0], *tm);
@@ -1367,7 +1456,12 @@ fn displacement(text: &str, gs: &GState) -> f64 {
     let th = gs.hscale / 100.0;
     let mut tx = 0.0;
     for ch in text.chars() {
-        let mut adv = em_width(gs.face, ch) * gs.font_size + gs.char_space;
+        let em = if is_box_char(ch) {
+            1.0
+        } else {
+            em_width(gs.face, ch)
+        };
+        let mut adv = em * gs.font_size + gs.char_space;
         if ch == ' ' {
             adv += gs.word_space;
         }
@@ -1434,13 +1528,7 @@ const TIMES_ROMAN: [u16; 95] = [
 ];
 
 fn face_from_base(name: &[u8]) -> Face {
-    let name = strip_subset(name);
-    let raw = String::from_utf8_lossy(name);
-    let folded: String = raw
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .flat_map(|c| c.to_lowercase())
-        .collect();
+    let folded = fold_font(name);
     if folded.contains("courier") || folded.contains("nimbusmon") {
         return Face::Courier;
     }
@@ -1466,6 +1554,30 @@ fn strip_subset(name: &[u8]) -> &[u8] {
     } else {
         name
     }
+}
+
+fn is_box_char(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{2610}' | '\u{2611}' | '\u{2612}' | '\u{25A1}' | '\u{25A2}' | '\u{25FB}' | '\u{2B1C}'
+    )
+}
+
+/// UTF-16 text is already Unicode. Other show strings are bytes; Wingdings and
+/// a ToUnicode CMap tell us which of those bytes draw a box.
+fn decode_show(raw: &[u8], gs: &GState) -> String {
+    if raw.len() >= 2 && raw[0] == 0xFE && raw[1] == 0xFF {
+        return pdf_to_string(raw);
+    }
+    let mut out = String::new();
+    for &b in raw {
+        if gs.boxes.has(b) {
+            out.push('\u{2610}');
+        } else {
+            out.push(b as char);
+        }
+    }
+    out
 }
 
 fn pdf_to_string(bytes: &[u8]) -> String {
@@ -1498,12 +1610,12 @@ fn form_source(
     doc: &Document,
     id: ObjectId,
     parent: &HashMap<Vec<u8>, ObjectId>,
-    parent_fonts: &HashMap<Vec<u8>, Face>,
+    parent_fonts: &HashMap<Vec<u8>, FontInfo>,
 ) -> Option<(
     Vec<u8>,
     Mat,
     HashMap<Vec<u8>, ObjectId>,
-    HashMap<Vec<u8>, Face>,
+    HashMap<Vec<u8>, FontInfo>,
 )> {
     let (dict, bytes) = {
         let stream = doc.get_object(id).ok()?.as_stream().ok()?;
@@ -1533,8 +1645,8 @@ fn form_source(
 fn resource_maps(
     doc: &Document,
     resources: &Dictionary,
-    parent_fonts: &HashMap<Vec<u8>, Face>,
-) -> (HashMap<Vec<u8>, ObjectId>, HashMap<Vec<u8>, Face>) {
+    parent_fonts: &HashMap<Vec<u8>, FontInfo>,
+) -> (HashMap<Vec<u8>, ObjectId>, HashMap<Vec<u8>, FontInfo>) {
     let mut xobjects = HashMap::new();
     insert_xobjects(doc, resources, &mut xobjects);
     let mut fonts = HashMap::new();
@@ -1553,7 +1665,7 @@ fn page_xobjects(doc: &Document, page_id: ObjectId) -> HashMap<Vec<u8>, ObjectId
     map
 }
 
-fn page_fonts(doc: &Document, page_id: ObjectId) -> HashMap<Vec<u8>, Face> {
+fn page_fonts(doc: &Document, page_id: ObjectId) -> HashMap<Vec<u8>, FontInfo> {
     let mut map = HashMap::new();
     for dict in page_resource_dicts(doc, page_id) {
         insert_fonts(doc, &dict, &mut map);
@@ -1598,7 +1710,7 @@ fn page_resource_dicts(doc: &Document, page_id: ObjectId) -> Vec<Dictionary> {
     chain
 }
 
-fn insert_fonts(doc: &Document, dict: &Dictionary, map: &mut HashMap<Vec<u8>, Face>) {
+fn insert_fonts(doc: &Document, dict: &Dictionary, map: &mut HashMap<Vec<u8>, FontInfo>) {
     let fonts = match dict.get(b"Font") {
         Ok(Object::Dictionary(inner)) => inner.clone(),
         Ok(Object::Reference(id)) => match doc.get_dictionary(*id) {
@@ -1611,14 +1723,147 @@ fn insert_fonts(doc: &Document, dict: &Dictionary, map: &mut HashMap<Vec<u8>, Fa
         let Ok(id) = value.as_reference() else {
             continue;
         };
-        let Ok(font) = doc.get_dictionary(id) else {
+        let Ok(font) = doc.get_dictionary(id).cloned() else {
             continue;
         };
-        let Some(base) = font.get(b"BaseFont").ok().and_then(|o| o.as_name().ok()) else {
+        if font
+            .get(b"BaseFont")
+            .ok()
+            .and_then(|o| o.as_name().ok())
+            .is_none()
+        {
             continue;
-        };
-        map.insert(name.clone(), face_from_base(base));
+        }
+        map.insert(name.clone(), font_info(doc, &font));
     }
+}
+
+fn font_info(doc: &Document, font: &Dictionary) -> FontInfo {
+    let base = font
+        .get(b"BaseFont")
+        .ok()
+        .and_then(|o| o.as_name().ok())
+        .unwrap_or(b"");
+    let mut boxes = checkbox_bytes(base);
+    if let Some(cmap) = tounicode_bytes(doc, font) {
+        mark_tounicode(&mut boxes, &cmap);
+    }
+    FontInfo {
+        face: face_from_base(base),
+        boxes,
+    }
+}
+
+/// Symbol fonts draw an empty box at a fixed byte. Helvetica's 0xA8 is a diaeresis.
+fn checkbox_bytes(base: &[u8]) -> BoxMask {
+    let mut mask = BoxMask::none();
+    let folded = fold_font(base);
+    if folded.contains("wingdings2") {
+        mask.set(0xA3);
+        mask.set(b'R');
+    } else if folded.contains("wingdings") || folded.contains("webdings") {
+        mask.set(0xA8);
+        mask.set(0xFE);
+    }
+    mask
+}
+
+fn fold_font(name: &[u8]) -> String {
+    let name = strip_subset(name);
+    String::from_utf8_lossy(name)
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .flat_map(|c| c.to_lowercase())
+        .collect()
+}
+
+fn tounicode_bytes(doc: &Document, font: &Dictionary) -> Option<Vec<u8>> {
+    let id = font.get(b"ToUnicode").ok()?.as_reference().ok()?;
+    let stream = doc.get_object(id).ok()?.as_stream().ok()?;
+    match stream.decompressed_content() {
+        Ok(decoded) if !decoded.is_empty() || stream.content.is_empty() => Some(decoded),
+        _ => Some(stream.content.clone()),
+    }
+}
+
+/// Single-byte `beginbfchar` / `beginbfrange` entries whose destination is a box.
+fn mark_tounicode(mask: &mut BoxMask, cmap: &[u8]) {
+    let text = String::from_utf8_lossy(cmap);
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+    let mut i = 0;
+    while i < tokens.len() {
+        match tokens[i] {
+            "beginbfchar" => {
+                i += 1;
+                while i < tokens.len() && tokens[i] != "endbfchar" {
+                    if i + 1 >= tokens.len() {
+                        break;
+                    }
+                    if let (Some(src), Some(dest)) = (one_byte(tokens[i]), cmap_char(tokens[i + 1]))
+                    {
+                        if is_box_char(dest) {
+                            mask.set(src);
+                        }
+                    }
+                    i += 2;
+                }
+            }
+            "beginbfrange" => {
+                i += 1;
+                while i < tokens.len() && tokens[i] != "endbfrange" {
+                    if i + 2 >= tokens.len() {
+                        break;
+                    }
+                    if tokens[i + 2].starts_with('[') {
+                        i += 3;
+                        while i < tokens.len()
+                            && !tokens[i - 1].ends_with(']')
+                            && tokens[i] != "endbfrange"
+                        {
+                            i += 1;
+                        }
+                        continue;
+                    }
+                    if let (Some(start), Some(end), Some(dest)) = (
+                        one_byte(tokens[i]),
+                        one_byte(tokens[i + 1]),
+                        cmap_char(tokens[i + 2]),
+                    ) {
+                        let mut code = u32::from(dest);
+                        let mut b = start;
+                        loop {
+                            if char::from_u32(code).is_some_and(is_box_char) {
+                                mask.set(b);
+                            }
+                            if b == end {
+                                break;
+                            }
+                            b = b.wrapping_add(1);
+                            code = code.wrapping_add(1);
+                        }
+                    }
+                    i += 3;
+                }
+            }
+            _ => i += 1,
+        }
+    }
+}
+
+fn one_byte(token: &str) -> Option<u8> {
+    let hex = token.strip_prefix('<')?.strip_suffix('>')?;
+    if hex.len() != 2 {
+        return None;
+    }
+    u8::from_str_radix(hex, 16).ok()
+}
+
+fn cmap_char(token: &str) -> Option<char> {
+    let hex = token.strip_prefix('<')?.strip_suffix('>')?;
+    if hex.len() != 4 {
+        return None;
+    }
+    char::from_u32(u32::from(u16::from_str_radix(hex, 16).ok()?))
 }
 
 fn insert_xobjects(doc: &Document, dict: &Dictionary, map: &mut HashMap<Vec<u8>, ObjectId>) {
@@ -2220,6 +2465,127 @@ mod tests {
         let normal = ap.get(b"N").unwrap().as_dict().unwrap();
         assert!(normal.has(b"Yes"));
         assert!(normal.has(b"Off"));
+    }
+
+    #[test]
+    fn ballot_box_glyph_becomes_a_checkbox() {
+        let pdf = page_pdf(
+            "BT /F1 12 Tf 72 700 Td <FEFF2610> Tj ET\n\
+             BT /F1 12 Tf 90 700 Td (Coal) Tj ET\n",
+        );
+        let (out, stats) = prepare_form(&pdf).unwrap();
+        assert_eq!(stats.fields_added, 1, "{:?}", stats.fields);
+        assert_eq!(stats.fields[0].kind, FieldKind::Checkbox);
+        assert_eq!(
+            field_map(&out),
+            vec![("Coal".to_string(), "Btn".to_string())]
+        );
+    }
+
+    #[test]
+    fn wingdings_box_becomes_a_checkbox() {
+        let pdf = page_font(
+            "Wingdings",
+            "BT /F1 12 Tf 72 700 Td <A8> Tj ET\n\
+             BT /F1 12 Tf 90 700 Td (Oil) Tj ET\n",
+        );
+        let (out, stats) = prepare_form(&pdf).unwrap();
+        assert_eq!(stats.fields_added, 1, "{:?}", stats.fields);
+        assert_eq!(
+            field_map(&out),
+            vec![("Oil".to_string(), "Btn".to_string())]
+        );
+    }
+
+    #[test]
+    fn helvetica_diaeresis_is_not_a_checkbox() {
+        let pdf = page_pdf("BT /F1 12 Tf 72 700 Td <A8> Tj ET\n");
+        assert!(prepare_form(&pdf).unwrap().1.kept_original);
+    }
+
+    #[test]
+    fn checkbox_keeps_the_blank_beside_it() {
+        let pdf = page_pdf(
+            "BT /F1 12 Tf 72 700 Td <FEFF2610> Tj ET\n\
+             BT /F1 12 Tf 90 700 Td (Storage, specify type: ________) Tj ET\n",
+        );
+        let (_out, stats) = prepare_form(&pdf).unwrap();
+        assert_eq!(stats.fields_added, 2, "{:?}", stats.fields);
+        assert!(stats
+            .fields
+            .iter()
+            .any(|f| f.kind == FieldKind::Checkbox && f.name.starts_with("Storage")));
+        assert!(stats
+            .fields
+            .iter()
+            .any(|f| f.kind == FieldKind::Text && f.name.starts_with("Storage")));
+    }
+
+    #[test]
+    fn tounicode_marks_ballot_box_bytes() {
+        let cmap = b"2 beginbfchar\n<6F> <2610>\n<70> <0041>\nendbfchar\n\
+                     1 beginbfrange\n<A8> <A9> <2611>\nendbfrange\n\
+                     1 beginbfrange\n<81> <82> [<2022> <2610>]\nendbfrange\n";
+        let mut mask = BoxMask::none();
+        mark_tounicode(&mut mask, cmap);
+        assert!(mask.has(0x6F));
+        assert!(!mask.has(0x70));
+        assert!(mask.has(0xA8));
+        assert!(mask.has(0xA9));
+        assert!(!mask.has(0x81));
+    }
+
+    #[test]
+    fn tounicode_ballot_box_becomes_a_checkbox() {
+        let mut doc = Document::with_version("1.4");
+        let pages_id = doc.new_object_id();
+        let mut stream = Stream::new(
+            dictionary! {},
+            b"BT /F1 12 Tf 72 700 Td <A1> Tj ET\nBT /F1 12 Tf 90 700 Td (Solar) Tj ET\n".to_vec(),
+        );
+        stream.allows_compression = false;
+        let content_id = doc.add_object(stream);
+        let mut cmap = Stream::new(
+            dictionary! {},
+            b"1 beginbfchar <A1> <2610> endbfchar\n".to_vec(),
+        );
+        cmap.allows_compression = false;
+        let cmap_id = doc.add_object(cmap);
+        let font_id = doc.add_object(dictionary! {
+            "Type" => "Font",
+            "Subtype" => "Type1",
+            "BaseFont" => Object::Name(b"ABCDEF+Custom".to_vec()),
+            "ToUnicode" => cmap_id,
+        });
+        let page_id = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+            "Contents" => content_id,
+            "Resources" => dictionary! {
+                "Font" => dictionary! { "F1" => font_id },
+            },
+        });
+        doc.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => vec![page_id.into()],
+                "Count" => 1,
+            }),
+        );
+        let catalog = doc.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+        });
+        doc.trailer.set("Root", Object::Reference(catalog));
+        let pdf = save(&mut doc);
+        let (out, stats) = prepare_form(&pdf).unwrap();
+        assert_eq!(stats.fields_added, 1, "{:?}", stats.fields);
+        assert_eq!(
+            field_map(&out),
+            vec![("Solar".to_string(), "Btn".to_string())]
+        );
     }
 
     #[test]
