@@ -41,3 +41,40 @@ pub fn inspect_file(input: &[u8]) -> Result<InspectReport, PdfError> {
         notes: c.notes,
     })
 }
+
+#[derive(Debug)]
+pub struct FormField {
+    pub name: String,
+    pub kind: String,
+    pub page: u32,
+    pub rect: [f64; 4],
+}
+
+#[derive(Debug)]
+pub struct FormReport {
+    pub kept_original: bool,
+    pub notes: Vec<String>,
+    pub fields: Vec<FormField>,
+}
+
+/// Add AcroForm widgets in empty underlines, boxes, and checkboxes.
+pub fn prepare_form(input: &[u8]) -> Result<(Vec<u8>, FormReport), PdfError> {
+    let (out, stats) = pdfx_pdf::prepare_form(input)?;
+    Ok((
+        out,
+        FormReport {
+            kept_original: stats.kept_original,
+            notes: stats.notes,
+            fields: stats
+                .fields
+                .into_iter()
+                .map(|field| FormField {
+                    name: field.name,
+                    kind: field.kind.as_str().to_string(),
+                    page: field.page,
+                    rect: field.rect,
+                })
+                .collect(),
+        },
+    ))
+}
