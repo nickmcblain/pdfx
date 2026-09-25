@@ -163,6 +163,7 @@ struct Seg {
     vert: bool,
 }
 
+#[derive(Clone)]
 struct TextRun {
     text: String,
     x: f64,
@@ -172,10 +173,19 @@ struct TextRun {
     up: f64,
 }
 
+#[derive(Clone, Copy)]
 struct HLine {
     x0: f64,
     x1: f64,
     y: f64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Face {
+    Helvetica,
+    Times,
+    Courier,
+    Generic,
 }
 
 type Mat = [f64; 6];
@@ -185,6 +195,7 @@ const ID: Mat = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
 #[derive(Clone, Copy)]
 struct GState {
     ctm: Mat,
+    face: Face,
     font_size: f64,
     leading: f64,
     hscale: f64,
@@ -199,6 +210,7 @@ impl GState {
     fn new(ctm: Mat) -> Self {
         Self {
             ctm,
+            face: Face::Generic,
             font_size: 12.0,
             leading: 0.0,
             hscale: 100.0,
@@ -264,12 +276,24 @@ fn propose(
 
     let mut blocked: Vec<[f64; 4]> = occupied.iter().copied().map(normalize).collect();
     let mut out = Vec::new();
+    let blanks: Vec<HLine> = lines
+        .iter()
+        .copied()
+        .filter(|line| !grid_border(line, &marks.segs))
+        .collect();
 
-    for run in &marks.texts {
-        if !underscore_slot(&run.text) || run.w < 18.0 {
+    for run in underscore_spans(&marks.texts) {
+        if run.w < 18.0 || on_vector_blank(&run, &blanks) {
             continue;
         }
-        let Some(rect) = clamp_rect(underscore_rect(run), *page, 8.0) else {
+        let Some(mut rect) = clamp_rect(underscore_rect(&run), *page, 8.0) else {
+            continue;
+        };
+        let Some(clipped) = clip_off_text(rect, &marks.texts, run.y) else {
+            continue;
+        };
+        rect = clipped;
+        let Some(rect) = clamp_rect(rect, *page, 8.0) else {
             continue;
         };
         if !page.holds(rect) || blocked.iter().any(|b| overlaps(rect, *b)) {
@@ -325,37 +349,42 @@ fn propose(
     }
 
     for line in lines {
-        let len = line.x1 - line.x0;
-        if len < 28.0 || is_emphasis(&line, &marks.texts) || on_edge(&line, &blocked) {
+        if grid_border(&line, &marks.segs) || is_emphasis(&line, &marks.texts) {
             continue;
         }
-        let name = label_left(&marks.texts, line.x0, line.y)
-            .or_else(|| label_above_line(&marks.texts, &line))
-            .unwrap_or_default();
-        if name.is_empty()
-            && (len < 48.0
-                || len > page.width() * 0.85
-                || line.y < page.lly + 40.0
-                || line.y > page.ury - 40.0)
-        {
-            continue;
+        for piece in gaps_on_line(&line, &marks.texts) {
+            let len = piece.x1 - piece.x0;
+            if on_edge(&piece, &blocked) {
+                continue;
+            }
+            let name = label_left(&marks.texts, piece.x0, piece.y)
+                .or_else(|| label_above_line(&marks.texts, &piece))
+                .unwrap_or_default();
+            if name.is_empty()
+                && (len < 48.0
+                    || len > page.width() * 0.85
+                    || piece.y < page.lly + 40.0
+                    || piece.y > page.ury - 40.0)
+            {
+                continue;
+            }
+            let height = nearby_size(&marks.texts, &piece);
+            let rect = [piece.x0, piece.y - 1.5, piece.x1, piece.y - 1.5 + height];
+            let Some(rect) = clamp_rect(rect, *page, 8.0) else {
+                continue;
+            };
+            if !page.holds(rect) || blocked.iter().any(|b| overlaps(rect, *b)) {
+                continue;
+            }
+            blocked.push(rect);
+            out.push(Slot {
+                page: page_no,
+                page_id,
+                kind: FieldKind::Text,
+                rect,
+                name,
+            });
         }
-        let height = nearby_size(&marks.texts, &line);
-        let rect = [line.x0, line.y - 1.5, line.x1, line.y - 1.5 + height];
-        let Some(rect) = clamp_rect(rect, *page, 8.0) else {
-            continue;
-        };
-        if !page.holds(rect) || blocked.iter().any(|b| overlaps(rect, *b)) {
-            continue;
-        }
-        blocked.push(rect);
-        out.push(Slot {
-            page: page_no,
-            page_id,
-            kind: FieldKind::Text,
-            rect,
-            name,
-        });
     }
 
     out
@@ -582,6 +611,164 @@ fn underscore_slot(text: &str) -> bool {
     t.len() >= 3 && t.chars().all(|c| c == '_')
 }
 
+/// Join `___/___` into one blank. The slash is a few points, not a new field.
+fn underscore_spans(texts: &[TextRun]) -> Vec<TextRun> {
+    let mut spans: Vec<TextRun> = texts
+        .iter()
+        .filter(|run| underscore_slot(&run.text))
+        .cloned()
+        .collect();
+    spans.sort_by(|a, b| cmp_f(a.y, b.y).then(cmp_f(a.x, b.x)));
+    let mut out: Vec<TextRun> = Vec::new();
+    for run in spans {
+        if let Some(prev) = out.last_mut() {
+            let gap = run.x - (prev.x + prev.w);
+            if (prev.y - run.y).abs() < 2.5 && (-1.0..14.0).contains(&gap) {
+                let right = run.x + run.w;
+                prev.w = right - prev.x;
+                prev.text.push_str(&run.text);
+                continue;
+            }
+        }
+        out.push(run);
+    }
+    out
+}
+
+fn on_vector_blank(run: &TextRun, lines: &[HLine]) -> bool {
+    let x1 = run.x + run.w;
+    lines.iter().any(|line| {
+        let dy = run.y - line.y;
+        if !(-1.5..=6.0).contains(&dy) {
+            return false;
+        }
+        let ov = overlap_len(run.x, x1, line.x0, line.x1);
+        ov >= 12.0 && ov >= (x1 - run.x).min(line.x1 - line.x0) * 0.45
+    })
+}
+
+fn clip_off_text(rect: [f64; 4], texts: &[TextRun], baseline: f64) -> Option<[f64; 4]> {
+    let mut x0 = rect[0];
+    let mut x1 = rect[2];
+    for run in texts {
+        if bad_label_text(&run.text) || !run.text.chars().any(|c| c.is_alphanumeric()) {
+            continue;
+        }
+        let dy = (run.y - baseline).abs();
+        if dy > run.size * 0.6 + 2.0 {
+            continue;
+        }
+        let rx0 = run.x;
+        let rx1 = run.x + run.w;
+        if rx1 <= x0 + 0.8 || rx0 >= x1 - 0.8 {
+            continue;
+        }
+        if rx0 <= x0 + 1.0 && rx1 < x1 {
+            x0 = rx1;
+        } else if rx1 >= x1 - 1.0 && rx0 > x0 {
+            x1 = rx0;
+        } else if rx0 > x0 && rx1 < x1 {
+            if x1 - rx1 >= rx0 - x0 {
+                x0 = rx1;
+            } else {
+                x1 = rx0;
+            }
+        }
+    }
+    if x1 - x0 < 18.0 {
+        None
+    } else {
+        Some([x0, rect[1], x1, rect[3]])
+    }
+}
+
+/// A long rule crossed by two or more verticals is a table or box edge.
+fn grid_border(line: &HLine, segs: &[Seg]) -> bool {
+    let len = line.x1 - line.x0;
+    if len < 80.0 {
+        return false;
+    }
+    let mut xs = Vec::new();
+    for seg in segs {
+        if !seg.vert {
+            continue;
+        }
+        let vx = (seg.x0 + seg.x1) * 0.5;
+        if vx < line.x0 - 1.5 || vx > line.x1 + 1.5 {
+            continue;
+        }
+        let y0 = seg.y0.min(seg.y1);
+        let y1 = seg.y0.max(seg.y1);
+        if line.y < y0 - 2.0 || line.y > y1 + 2.0 {
+            continue;
+        }
+        xs.push(vx);
+    }
+    xs.sort_by(|a, b| cmp_f(*a, *b));
+    let mut count = 0;
+    let mut last = f64::NEG_INFINITY;
+    for x in xs {
+        if x - last > 2.5 {
+            count += 1;
+            last = x;
+        }
+    }
+    count >= 2
+}
+
+/// Cut the stretches of a rule that sit under words. One line can hold several blanks.
+fn gaps_on_line(line: &HLine, texts: &[TextRun]) -> Vec<HLine> {
+    let mut cuts: Vec<(f64, f64)> = Vec::new();
+    for run in texts {
+        if run.w < 1.0 || bad_label_text(&run.text) {
+            continue;
+        }
+        let dy = run.y - line.y;
+        if dy < -2.0 || dy > run.size * 0.45 + 4.0 {
+            continue;
+        }
+        if overlap_len(run.x, run.x + run.w, line.x0, line.x1) < 2.0 {
+            continue;
+        }
+        let a = (run.x - 0.5).max(line.x0);
+        let b = (run.x + run.w + 0.5).min(line.x1);
+        if b > a {
+            cuts.push((a, b));
+        }
+    }
+    cuts.sort_by(|a, b| cmp_f(a.0, b.0));
+    let mut merged: Vec<(f64, f64)> = Vec::new();
+    for (a, b) in cuts {
+        if let Some(prev) = merged.last_mut() {
+            if a <= prev.1 + 1.0 {
+                prev.1 = prev.1.max(b);
+                continue;
+            }
+        }
+        merged.push((a, b));
+    }
+    let mut gaps = Vec::new();
+    let mut cursor = line.x0;
+    for (a, b) in merged {
+        if a - cursor >= 20.0 {
+            gaps.push(HLine {
+                x0: cursor,
+                x1: a,
+                y: line.y,
+            });
+        }
+        cursor = cursor.max(b);
+    }
+    if line.x1 - cursor >= 20.0 {
+        gaps.push(HLine {
+            x0: cursor,
+            x1: line.x1,
+            y: line.y,
+        });
+    }
+    gaps
+}
+
 fn sanitize(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     let trimmed = trimmed
@@ -763,8 +950,9 @@ fn page_marks(doc: &Document, page_id: ObjectId) -> Marks {
         return marks;
     };
     let xobjects = page_xobjects(doc, page_id);
+    let fonts = page_fonts(doc, page_id);
     let mut seen = HashSet::new();
-    interpret(doc, &bytes, ID, &xobjects, &mut marks, 0, &mut seen);
+    interpret(doc, &bytes, ID, &xobjects, &fonts, &mut marks, 0, &mut seen);
     marks
 }
 
@@ -773,6 +961,7 @@ fn interpret(
     data: &[u8],
     ctm: Mat,
     xobjects: &HashMap<Vec<u8>, ObjectId>,
+    fonts: &HashMap<Vec<u8>, Face>,
     marks: &mut Marks,
     depth: u32,
     seen: &mut HashSet<ObjectId>,
@@ -911,6 +1100,9 @@ fn interpret(
                 }
             }
             "Tf" => {
+                if let Some(name) = op.operands.first().and_then(|o| o.as_name().ok()) {
+                    gs.face = fonts.get(name).copied().unwrap_or(Face::Generic);
+                }
                 if let Some(size) = nth_num(&op.operands, 1) {
                     gs.font_size = size.abs().max(0.1);
                 }
@@ -968,12 +1160,15 @@ fn interpret(
                 if depth >= 8 || !seen.insert(id) {
                     continue;
                 }
-                if let Some((bytes, matrix, child)) = form_source(doc, id, xobjects) {
+                if let Some((bytes, matrix, child, child_fonts)) =
+                    form_source(doc, id, xobjects, fonts)
+                {
                     interpret(
                         doc,
                         &bytes,
                         mul(matrix, gs.ctm),
                         &child,
+                        &child_fonts,
                         marks,
                         depth + 1,
                         seen,
@@ -1113,7 +1308,7 @@ fn displacement(text: &str, gs: &GState) -> f64 {
     let th = gs.hscale / 100.0;
     let mut tx = 0.0;
     for ch in text.chars() {
-        let mut adv = char_em(ch) * gs.font_size + gs.char_space;
+        let mut adv = em_width(gs.face, ch) * gs.font_size + gs.char_space;
         if ch == ' ' {
             adv += gs.word_space;
         }
@@ -1132,6 +1327,24 @@ fn text_move(tlm: &mut Mat, tm: &mut Mat, tx: f64, ty: f64) {
     *tm = *tlm;
 }
 
+fn em_width(face: Face, ch: char) -> f64 {
+    match face {
+        Face::Courier => 0.6,
+        Face::Helvetica => table_width(&HELVETICA, ch).unwrap_or_else(|| char_em(ch)),
+        Face::Times => table_width(&TIMES_ROMAN, ch).unwrap_or_else(|| char_em(ch)),
+        Face::Generic => char_em(ch),
+    }
+}
+
+fn table_width(table: &[u16; 95], ch: char) -> Option<f64> {
+    let b = u32::from(ch);
+    if (32..=126).contains(&b) {
+        Some(f64::from(table[(b - 32) as usize]) / 1000.0)
+    } else {
+        None
+    }
+}
+
 fn char_em(c: char) -> f64 {
     match c {
         ' ' | '\t' => 0.28,
@@ -1141,6 +1354,58 @@ fn char_em(c: char) -> f64 {
         c if c.is_uppercase() => 0.70,
         c if c.is_ascii_digit() => 0.56,
         _ => 0.50,
+    }
+}
+
+// AFM widths, ASCII 32..=126, in 1000-unit ems. Bold and italic map to the roman face.
+const HELVETICA: [u16; 95] = [
+    278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278, 556, 556, 556,
+    556, 556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556, 1015, 667, 667, 722, 722, 667,
+    611, 778, 722, 278, 500, 667, 556, 833, 722, 778, 667, 778, 722, 667, 611, 722, 667, 944, 667,
+    667, 611, 278, 278, 278, 469, 556, 333, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500,
+    222, 833, 556, 556, 556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584,
+];
+
+const TIMES_ROMAN: [u16; 95] = [
+    250, 333, 408, 500, 500, 833, 778, 180, 333, 333, 500, 564, 250, 333, 250, 278, 500, 500, 500,
+    500, 500, 500, 500, 500, 500, 500, 278, 278, 564, 564, 564, 444, 921, 722, 667, 667, 722, 611,
+    556, 722, 722, 333, 389, 722, 611, 889, 722, 722, 556, 722, 667, 556, 611, 722, 722, 944, 722,
+    722, 611, 333, 278, 333, 469, 500, 333, 444, 500, 444, 500, 444, 333, 500, 500, 278, 278, 500,
+    278, 778, 500, 500, 500, 500, 333, 389, 278, 500, 500, 722, 500, 500, 444, 480, 200, 480, 541,
+];
+
+fn face_from_base(name: &[u8]) -> Face {
+    let name = strip_subset(name);
+    let raw = String::from_utf8_lossy(name);
+    let folded: String = raw
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .flat_map(|c| c.to_lowercase())
+        .collect();
+    if folded.contains("courier") || folded.contains("nimbusmon") {
+        return Face::Courier;
+    }
+    if folded.contains("times")
+        || folded.contains("liberationserif")
+        || folded.contains("nimbusrom")
+    {
+        return Face::Times;
+    }
+    if folded.contains("helvetica")
+        || folded.contains("arial")
+        || folded.contains("nimbussans")
+        || folded.contains("liberationsans")
+    {
+        return Face::Helvetica;
+    }
+    Face::Generic
+}
+
+fn strip_subset(name: &[u8]) -> &[u8] {
+    if name.len() > 7 && name[6] == b'+' && name[..6].iter().all(|b| b.is_ascii_uppercase()) {
+        &name[7..]
+    } else {
+        name
     }
 }
 
@@ -1174,7 +1439,13 @@ fn form_source(
     doc: &Document,
     id: ObjectId,
     parent: &HashMap<Vec<u8>, ObjectId>,
-) -> Option<(Vec<u8>, Mat, HashMap<Vec<u8>, ObjectId>)> {
+    parent_fonts: &HashMap<Vec<u8>, Face>,
+) -> Option<(
+    Vec<u8>,
+    Mat,
+    HashMap<Vec<u8>, ObjectId>,
+    HashMap<Vec<u8>, Face>,
+)> {
     let (dict, bytes) = {
         let stream = doc.get_object(id).ok()?.as_stream().ok()?;
         let subtype = stream.dict.get(b"Subtype").ok()?.as_name().ok()?;
@@ -1189,25 +1460,49 @@ fn form_source(
         (stream.dict.clone(), bytes)
     };
     let matrix = matrix_from(dict.get(b"Matrix").ok());
-    let child = match dict.get(b"Resources") {
-        Ok(Object::Dictionary(resources)) => {
-            let mut map = HashMap::new();
-            insert_xobjects(doc, resources, &mut map);
-            map
-        }
-        Ok(Object::Reference(rid)) => {
-            let mut map = HashMap::new();
-            if let Ok(resources) = doc.get_dictionary(*rid) {
-                insert_xobjects(doc, resources, &mut map);
-            }
-            map
-        }
-        _ => parent.clone(),
+    let (child, fonts) = match dict.get(b"Resources") {
+        Ok(Object::Dictionary(resources)) => resource_maps(doc, resources, parent_fonts),
+        Ok(Object::Reference(rid)) => match doc.get_dictionary(*rid) {
+            Ok(resources) => resource_maps(doc, resources, parent_fonts),
+            Err(_) => (parent.clone(), parent_fonts.clone()),
+        },
+        _ => (parent.clone(), parent_fonts.clone()),
     };
-    Some((bytes, matrix, child))
+    Some((bytes, matrix, child, fonts))
+}
+
+fn resource_maps(
+    doc: &Document,
+    resources: &Dictionary,
+    parent_fonts: &HashMap<Vec<u8>, Face>,
+) -> (HashMap<Vec<u8>, ObjectId>, HashMap<Vec<u8>, Face>) {
+    let mut xobjects = HashMap::new();
+    insert_xobjects(doc, resources, &mut xobjects);
+    let mut fonts = HashMap::new();
+    insert_fonts(doc, resources, &mut fonts);
+    if fonts.is_empty() {
+        fonts = parent_fonts.clone();
+    }
+    (xobjects, fonts)
 }
 
 fn page_xobjects(doc: &Document, page_id: ObjectId) -> HashMap<Vec<u8>, ObjectId> {
+    let mut map = HashMap::new();
+    for dict in page_resource_dicts(doc, page_id) {
+        insert_xobjects(doc, &dict, &mut map);
+    }
+    map
+}
+
+fn page_fonts(doc: &Document, page_id: ObjectId) -> HashMap<Vec<u8>, Face> {
+    let mut map = HashMap::new();
+    for dict in page_resource_dicts(doc, page_id) {
+        insert_fonts(doc, &dict, &mut map);
+    }
+    map
+}
+
+fn page_resource_dicts(doc: &Document, page_id: ObjectId) -> Vec<Dictionary> {
     let mut chain = Vec::new();
     let mut current = Some(page_id);
     let mut guard = 0;
@@ -1240,11 +1535,31 @@ fn page_xobjects(doc: &Document, page_id: ObjectId) -> HashMap<Vec<u8>, ObjectId
         }
         current = step.1;
     }
-    let mut map = HashMap::new();
-    for dict in chain.iter().rev() {
-        insert_xobjects(doc, dict, &mut map);
+    chain.reverse();
+    chain
+}
+
+fn insert_fonts(doc: &Document, dict: &Dictionary, map: &mut HashMap<Vec<u8>, Face>) {
+    let fonts = match dict.get(b"Font") {
+        Ok(Object::Dictionary(inner)) => inner.clone(),
+        Ok(Object::Reference(id)) => match doc.get_dictionary(*id) {
+            Ok(inner) => inner.clone(),
+            Err(_) => return,
+        },
+        _ => return,
+    };
+    for (name, value) in fonts.iter() {
+        let Ok(id) = value.as_reference() else {
+            continue;
+        };
+        let Ok(font) = doc.get_dictionary(id) else {
+            continue;
+        };
+        let Some(base) = font.get(b"BaseFont").ok().and_then(|o| o.as_name().ok()) else {
+            continue;
+        };
+        map.insert(name.clone(), face_from_base(base));
     }
-    map
 }
 
 fn insert_xobjects(doc: &Document, dict: &Dictionary, map: &mut HashMap<Vec<u8>, ObjectId>) {
@@ -1711,6 +2026,10 @@ mod tests {
     }
 
     fn page_pdf(ops: &str) -> Vec<u8> {
+        page_font("Helvetica", ops)
+    }
+
+    fn page_font(base: &str, ops: &str) -> Vec<u8> {
         let mut doc = Document::with_version("1.4");
         let pages_id = doc.new_object_id();
         let mut stream = Stream::new(dictionary! {}, ops.as_bytes().to_vec());
@@ -1719,7 +2038,7 @@ mod tests {
         let font_id = doc.add_object(dictionary! {
             "Type" => "Font",
             "Subtype" => "Type1",
-            "BaseFont" => "Helvetica",
+            "BaseFont" => Object::Name(base.as_bytes().to_vec()),
         });
         let page_id = doc.add_object(dictionary! {
             "Type" => "Page",
@@ -1972,5 +2291,133 @@ mod tests {
     #[test]
     fn rejects_garbage() {
         assert!(prepare_form(b"not a pdf").is_err());
+    }
+
+    fn advance(face: Face, text: &str, size: f64) -> f64 {
+        text.chars().map(|ch| em_width(face, ch) * size).sum()
+    }
+
+    #[test]
+    fn standard_widths_and_font_names() {
+        assert!((em_width(Face::Helvetica, '_') - 0.556).abs() < 0.0001);
+        assert!((em_width(Face::Times, ' ') - 0.250).abs() < 0.0001);
+        assert!((em_width(Face::Times, '_') - 0.500).abs() < 0.0001);
+        assert!((em_width(Face::Courier, 'W') - 0.6).abs() < 0.0001);
+        assert_eq!(face_from_base(b"ABCDEF+TimesNewRomanPSMT"), Face::Times);
+        assert_eq!(face_from_base(b"Arial-BoldMT"), Face::Helvetica);
+        assert_eq!(face_from_base(b"CourierNew"), Face::Courier);
+        assert_eq!(face_from_base(b"Calibri"), Face::Generic);
+    }
+
+    #[test]
+    fn line_under_address_starts_after_the_label() {
+        let pdf = page_pdf(
+            "BT /F1 12 Tf 72 700 Td (Address:) Tj ET\n\
+             72 697 m 400 697 l S\n",
+        );
+        let (_out, stats) = prepare_form(&pdf).unwrap();
+        assert_eq!(stats.fields.len(), 1, "{:?}", stats.fields);
+        let field = &stats.fields[0];
+        assert_eq!(field.name, "Address");
+        let label_end = 72.0 + advance(Face::Helvetica, "Address:", 12.0);
+        assert!(
+            field.rect[0] > label_end - 2.0 && field.rect[0] < label_end + 8.0,
+            "field covers the label: {:?} label_end={label_end}",
+            field.rect
+        );
+        assert!(field.rect[2] > 380.0, "{:?}", field.rect);
+    }
+
+    #[test]
+    fn one_rule_with_three_captions_splits() {
+        let pdf = page_pdf(
+            "BT /F1 12 Tf 72 700 Td (City:) Tj ET\n\
+             BT /F1 12 Tf 220 700 Td (State:) Tj ET\n\
+             BT /F1 12 Tf 380 700 Td (Zip Code:) Tj ET\n\
+             72 697 m 540 697 l S\n",
+        );
+        let (_out, stats) = prepare_form(&pdf).unwrap();
+        assert_eq!(stats.fields.len(), 3, "{:?}", stats.fields);
+        let mut fields = stats.fields.clone();
+        fields.sort_by(|a, b| cmp_f(a.rect[0], b.rect[0]));
+        assert_eq!(fields[0].name, "City");
+        assert_eq!(fields[1].name, "State");
+        assert_eq!(fields[2].name, "Zip Code");
+        let city_end = 72.0 + advance(Face::Helvetica, "City:", 12.0);
+        assert!(fields[0].rect[0] > city_end - 2.0, "{:?}", fields[0].rect);
+        assert!(fields[0].rect[2] < 220.0, "{:?}", fields[0].rect);
+        assert!(fields[1].rect[0] > 240.0, "{:?}", fields[1].rect);
+        assert!(fields[1].rect[2] < 380.0, "{:?}", fields[1].rect);
+        assert!(fields[2].rect[0] > 420.0, "{:?}", fields[2].rect);
+    }
+
+    #[test]
+    fn table_border_is_not_a_field_but_the_blank_is() {
+        let pdf = page_pdf(
+            "72 600 m 540 600 l S\n\
+             72 640 m 540 640 l S\n\
+             72 600 m 72 640 l S\n\
+             200 600 m 200 640 l S\n\
+             360 600 m 360 640 l S\n\
+             540 600 m 540 640 l S\n\
+             BT /F1 12 Tf 80 612 Td (Existing) Tj ET\n\
+             BT /F1 12 Tf 210 612 Td (___/___) Tj ET\n\
+             BT /F1 12 Tf 370 612 Td (NRIS) Tj ET\n",
+        );
+        let (_out, stats) = prepare_form(&pdf).unwrap();
+        assert!(
+            stats.fields.iter().all(|f| f.rect[2] - f.rect[0] < 220.0),
+            "row rule became a field: {:?}",
+            stats.fields
+        );
+        assert_eq!(stats.fields.len(), 1, "{:?}", stats.fields);
+        let field = &stats.fields[0];
+        assert!(
+            (210.0..220.0).contains(&field.rect[0]) && field.rect[2] > 248.0,
+            "{:?}",
+            field.rect
+        );
+    }
+
+    #[test]
+    fn times_prefix_lands_on_the_underscore_run() {
+        let pdf = page_font(
+            "Times-Roman",
+            "BT /F1 12 Tf 72 700 Td (located in ____________ Count) Tj ET\n\
+             BT /F1 12 Tf 72 660 Td (Operation Date ________,) Tj ET\n",
+        );
+        let (_out, stats) = prepare_form(&pdf).unwrap();
+        assert_eq!(stats.fields.len(), 2, "{:?}", stats.fields);
+        let mut fields = stats.fields.clone();
+        fields.sort_by(|a, b| cmp_f(b.rect[3], a.rect[3]));
+
+        let prefix = advance(Face::Times, "located in ", 12.0);
+        let blank = advance(Face::Times, "____________", 12.0);
+        assert!(
+            (fields[0].rect[0] - (72.0 + prefix)).abs() < 2.0,
+            "start {:?} expected {}",
+            fields[0].rect,
+            72.0 + prefix
+        );
+        assert!(
+            (fields[0].rect[2] - (72.0 + prefix + blank)).abs() < 2.0,
+            "end {:?} expected {}",
+            fields[0].rect,
+            72.0 + prefix + blank
+        );
+
+        let date = advance(Face::Times, "Operation Date ", 12.0);
+        let slots = advance(Face::Times, "________", 12.0);
+        assert!(
+            (fields[1].rect[0] - (72.0 + date)).abs() < 2.0,
+            "date start {:?} expected {}",
+            fields[1].rect,
+            72.0 + date
+        );
+        assert!(
+            fields[1].rect[2] < 72.0 + date + slots + 2.0,
+            "date field runs through the comma: {:?}",
+            fields[1].rect
+        );
     }
 }

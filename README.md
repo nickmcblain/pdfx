@@ -40,7 +40,7 @@ Page content streams that are already Flate stay put. An earlier pass re-encoded
 
 `pdfx form` does what Acrobat Pro's Prepare Form does to a flat page: it finds empty slots and drops real AcroForm widgets on them.
 
-It looks at the content stream, not a render. A run of underscores, a horizontal rule next to a label, an empty rectangle, or a small stroked square becomes a field. The name comes from the text on the left or above (`Name: ________` → `Name`). Slots with no caption are `Text1`, `Check1`, and so on. A second run leaves fields that are already there.
+It looks at the content stream, not a render. A run of underscores, a horizontal rule, an empty rectangle, or a small stroked square becomes a field. A rule with several captions on it is split, so `City:` `State:` `Zip Code:` become three fields instead of one field across the labels. Table borders are skipped. Underscore runs are measured with the page font (Helvetica, Times, Courier, and the usual aliases) so the widget sits on the blank. The name comes from the text on the left or above (`Name: ________` → `Name`). Slots with no caption are `Text1`, `Check1`, and so on. A second run leaves fields that are already there.
 
 Text fields are `/FT /Tx`. Checkboxes are `/FT /Btn` with off-state `/Off` and on-state `/Yes`. The file sets `/NeedAppearances` so a viewer draws typed text. Filling is just setting `/V` on the widget (a PDF string for text, the name `/Yes` for a check).
 
