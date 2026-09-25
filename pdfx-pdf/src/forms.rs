@@ -259,7 +259,7 @@ fn propose(
     rects.retain(|r| {
         let w = r[2] - r[0];
         let h = r[3] - r[1];
-        if h <= 7.0 && w >= 36.0 && h >= 0.3 {
+        if h <= 7.0 && w >= 18.0 && h >= 0.3 {
             flat.push(HLine {
                 x0: r[0],
                 x1: r[2],
@@ -272,6 +272,7 @@ fn propose(
     });
     lines.extend(flat);
     dedup_lines(&mut lines);
+    join_lines(&mut lines);
     dedup_rects(&mut rects);
 
     let mut blocked: Vec<[f64; 4]> = occupied.iter().copied().map(normalize).collect();
@@ -361,7 +362,7 @@ fn propose(
                 .or_else(|| label_above_line(&marks.texts, &piece))
                 .unwrap_or_default();
             if name.is_empty()
-                && (len < 48.0
+                && (len < 18.0
                     || len > page.width() * 0.85
                     || piece.y < page.lly + 40.0
                     || piece.y > page.ury - 40.0)
@@ -615,7 +616,10 @@ fn underscore_slot(text: &str) -> bool {
 fn underscore_spans(texts: &[TextRun]) -> Vec<TextRun> {
     let mut spans: Vec<TextRun> = texts
         .iter()
-        .filter(|run| underscore_slot(&run.text))
+        .filter(|run| {
+            let t = run.text.trim();
+            !t.is_empty() && t.chars().all(|c| c == '_')
+        })
         .cloned()
         .collect();
     spans.sort_by(|a, b| cmp_f(a.y, b.y).then(cmp_f(a.x, b.x)));
@@ -724,7 +728,7 @@ fn gaps_on_line(line: &HLine, texts: &[TextRun]) -> Vec<HLine> {
             continue;
         }
         let dy = run.y - line.y;
-        if dy < -2.0 || dy > run.size * 0.45 + 4.0 {
+        if dy < -2.0 || dy > run.size + 2.0 {
             continue;
         }
         if overlap_len(run.x, run.x + run.w, line.x0, line.x1) < 2.0 {
@@ -859,6 +863,23 @@ fn horiz_lines(segs: &[Seg]) -> Vec<HLine> {
         });
     }
     lines
+}
+
+/// A slash between `___` and `___` is a few points. A letter between blanks is wider.
+fn join_lines(lines: &mut Vec<HLine>) {
+    lines.sort_by(|a, b| cmp_f(a.y, b.y).then(cmp_f(a.x0, b.x0)));
+    let mut out: Vec<HLine> = Vec::new();
+    for line in lines.drain(..) {
+        if let Some(prev) = out.last_mut() {
+            let gap = line.x0 - prev.x1;
+            if (prev.y - line.y).abs() < 1.6 && (-1.0..=6.0).contains(&gap) {
+                prev.x1 = prev.x1.max(line.x1);
+                continue;
+            }
+        }
+        out.push(line);
+    }
+    *lines = out;
 }
 
 fn dedup_lines(lines: &mut Vec<HLine>) {
@@ -1189,8 +1210,46 @@ fn paint(path: &mut Path, marks: &mut Marks, gs: &GState, stroke: bool, fill: bo
         if stroke_ok {
             marks.segs.extend(path.segs.iter().cloned());
         }
+    } else if fill {
+        // A black rule is often a filled sliver, not a stroke. A solid box is not.
+        keep_ink_rules(path, marks);
     }
     path.clear();
+}
+
+fn keep_ink_rules(path: &Path, marks: &mut Marks) {
+    let mut y0 = f64::INFINITY;
+    let mut y1 = f64::NEG_INFINITY;
+    for seg in &path.segs {
+        y0 = y0.min(seg.y0.min(seg.y1));
+        y1 = y1.max(seg.y0.max(seg.y1));
+    }
+    for rect in &path.rects {
+        y0 = y0.min(rect[1]);
+        y1 = y1.max(rect[3]);
+    }
+    if !y0.is_finite() || y1 - y0 > 3.5 {
+        return;
+    }
+    for seg in &path.segs {
+        if seg.horiz && seg.x1 - seg.x0 >= 8.0 {
+            marks.segs.push(seg.clone());
+        }
+    }
+    for rect in &path.rects {
+        let w = rect[2] - rect[0];
+        if w >= 8.0 && rect[3] - rect[1] <= 3.5 {
+            let y = (rect[1] + rect[3]) * 0.5;
+            marks.segs.push(Seg {
+                x0: rect[0],
+                y0: y,
+                x1: rect[2],
+                y1: y,
+                horiz: true,
+                vert: false,
+            });
+        }
+    }
 }
 
 fn line_to(path: &mut Path, ctm: Mat, x: f64, y: f64) {
@@ -1203,7 +1262,7 @@ fn line_to(path: &mut Path, ctm: Mat, x: f64, y: f64) {
     let p1 = apply(ctm, x, y);
     let dx = (p1.0 - p0.0).abs();
     let dy = (p1.1 - p0.1).abs();
-    let horiz = dy <= 1.6 && dx >= 6.0;
+    let horiz = dy <= 1.6 && dx >= 2.0;
     let vert = dx <= 1.6 && dy >= 6.0;
     if horiz || vert {
         path.segs.push(Seg {
@@ -2419,5 +2478,57 @@ mod tests {
             "date field runs through the comma: {:?}",
             fields[1].rect
         );
+    }
+
+    #[test]
+    fn filled_rules_and_short_date_blanks_are_fields() {
+        let ruled = page_pdf(
+            "BT /F1 12 Tf 72 700 Td (City:) Tj ET\n\
+             BT /F1 12 Tf 250 700 Td (State:) Tj ET\n\
+             72 697 400 1.2 re f\n\
+             BT /F1 12 Tf 72 640 Td (GPS Coordinates:) Tj ET\n\
+             BT /F1 12 Tf 280 640 Td (N) Tj ET\n\
+             BT /F1 12 Tf 420 640 Td (W) Tj ET\n\
+             230 637 40 1 re f\n\
+             300 637 110 1 re f\n\
+             210 560 36 1 re f\n\
+             249 560 36 1 re f\n",
+        );
+        let (_out, stats) = prepare_form(&ruled).unwrap();
+        let mut fields = stats.fields.clone();
+        fields.sort_by(|a, b| cmp_f(b.rect[3], a.rect[3]).then(cmp_f(a.rect[0], b.rect[0])));
+        let names: Vec<_> = fields.iter().map(|f| f.name.as_str()).collect();
+        assert!(
+            names.contains(&"City") && names.contains(&"State"),
+            "city line missed: {names:?} {:?}",
+            fields.iter().map(|f| f.rect).collect::<Vec<_>>()
+        );
+        assert!(
+            names
+                .iter()
+                .filter(|n| **n == "GPS Coordinates" || **n == "N")
+                .count()
+                >= 2
+                || fields
+                    .iter()
+                    .filter(|f| f.rect[1] > 600.0 && f.rect[1] < 660.0)
+                    .count()
+                    >= 2,
+            "gps blanks missed: {names:?} {:?}",
+            fields
+                .iter()
+                .map(|f| (f.name.as_str(), f.rect))
+                .collect::<Vec<_>>()
+        );
+        let dates: Vec<_> = fields.iter().filter(|f| f.rect[3] < 590.0).collect();
+        assert_eq!(dates.len(), 1, "date halves: {:?}", fields);
+        assert!(
+            dates[0].rect[2] - dates[0].rect[0] > 60.0,
+            "{:?}",
+            dates[0].rect
+        );
+
+        let solid = page_pdf("20 600 14 14 re f\n");
+        assert!(prepare_form(&solid).unwrap().1.kept_original);
     }
 }
