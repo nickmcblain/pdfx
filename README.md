@@ -28,6 +28,16 @@ No `-o` on `compress` writes `deck.pdfx.pdf` next to the input. No `-o` on `form
 
 `--report` prints input and output sizes plus a one-line tally (orphans removed, images rewritten, duplicates dropped). If nothing got smaller you still get a file, and the report says `kept original`.
 
+## Desktop
+
+`pdfx-gui` is the same inspect, compress, and prepare-form actions in a window, for people who do not want a terminal. Drop a PDF (or use Open PDF), add one or more steps, and run them from top to bottom. Each step receives the file the previous step wrote. Save PDF writes the result.
+
+```bash
+cargo run -p pdfx-gui
+```
+
+Ready-made downloads for macOS, Windows, and Linux are on the [landing page](https://nickmcblain.github.io/pdfx/) and the [releases page](https://github.com/nickmcblain/pdfx/releases/latest). Nothing else needs installing. On Linux the window uses the desktop's own X11 or Wayland libraries, which every desktop install already has.
+
 ## What it does
 
 Walks the object graph, drops unreachable objects, and collapses identical decoded images to one XObject.
@@ -55,6 +65,7 @@ It will not beat a file that is already mid-quality 4:2:0 JPEG unless we downsam
 | Crate | Role |
 | --- | --- |
 | `pdfx-cli` | clap binary |
+| `pdfx-gui` | desktop window |
 | `pdfx-core` | inspect / compress / form entry |
 | `pdfx-pdf` | object graph, images, save |
 | `pdfx-deflate` | zlib-wrapped DEFLATE |

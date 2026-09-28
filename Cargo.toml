@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "pdfx-cli",
     "pdfx-core",
+    "pdfx-gui",
     "pdfx-pdf",
     "pdfx-deflate",
     "pdfx-jpeg",

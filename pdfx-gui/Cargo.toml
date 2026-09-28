@@ -1,0 +1,14 @@
+[package]
+name = "pdfx-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "pdfx-gui"
+path = "src/main.rs"
+
+[dependencies]
+eframe = "0.36.2"
+pdfx-core.workspace = true
+rfd = "0.17.2"

@@ -7,3 +7,6 @@ license.workspace = true
 [dependencies]
 pdfx-pdf.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+lopdf.workspace = true
