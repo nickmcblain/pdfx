@@ -78,4 +78,9 @@ mod tests {
         let out = resize_rgb(&src, 2, 2, 1, 1);
         assert_eq!(out, vec![35, 0, 0]);
     }
+
+    #[test]
+    fn box_2x2_gray() {
+        assert_eq!(resize_gray(&[0, 10, 30, 60], 2, 2, 1, 1), vec![25]);
+    }
 }

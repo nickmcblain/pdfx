@@ -1,4 +1,6 @@
-use std::io::Write;
+mod common;
+
+use common::pdf_with_content;
 use std::process::Command;
 
 #[test]
@@ -30,42 +32,8 @@ fn compare_qpdf_and_gs_when_installed() {
 }
 
 fn minimal_hello() -> Vec<u8> {
-    // Uncompressed content stream — plenty of Flate work.
-    let body = "BT /F1 12 Tf 50 700 Td (hello hello hello hello hello) Tj ET\n".repeat(80);
-    let stream = format!("<< /Length {} >>\nstream\n{}endstream\n", body.len(), body);
-    // Build with lopdf via pdfx-pdf tests is nicer; keep a tiny valid file here.
-    let _ = stream;
-    pdfx_pdf_text()
-}
-
-fn pdfx_pdf_text() -> Vec<u8> {
-    // Duplicate the text fixture path through compress/inspect only.
-    // Hand-rolled PDF with a long uncompressed stream.
     let content = "BT /F1 12 Tf 72 700 Td (xxxxxxxxxxxxxxxxxxxxxxxx) Tj ET\n".repeat(60);
-    let content_len = content.len();
-    let objects = [
-        "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n".to_string(),
-        "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n".to_string(),
-        "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n".to_string(),
-        format!("4 0 obj\n<< /Length {content_len} >>\nstream\n{content}endstream\nendobj\n"),
-        "5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n".to_string(),
-    ];
-    let mut body = String::from("%PDF-1.4\n");
-    let mut offsets = Vec::new();
-    for o in &objects {
-        offsets.push(body.len());
-        body.push_str(o);
-    }
-    let xref_at = body.len();
-    body.push_str("xref\n0 6\n");
-    body.push_str("0000000000 65535 f \n");
-    for off in offsets {
-        body.push_str(&format!("{off:010} 00000 n \n"));
-    }
-    body.push_str(&format!(
-        "trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n{xref_at}\n%%EOF\n"
-    ));
-    body.into_bytes()
+    pdf_with_content(&content)
 }
 
 fn run_qpdf(input: &[u8]) -> Option<Vec<u8>> {
@@ -115,10 +83,4 @@ fn tempfile_dir() -> Option<std::path::PathBuf> {
     let dir = std::env::temp_dir().join(format!("pdfx-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir)
-}
-
-// keep Write in scope for possible future fixture writers
-#[allow(dead_code)]
-fn _touch(w: &mut impl Write) {
-    let _ = w;
 }

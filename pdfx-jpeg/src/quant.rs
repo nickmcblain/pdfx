@@ -9,3 +9,17 @@ pub fn scale_table(base: &[u8; 64], quality: u8) -> [u8; 64] {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extremes_clamp() {
+        let base = [16u8; 64];
+        assert!(scale_table(&base, 100).iter().all(|&v| v == 1));
+        assert!(scale_table(&base, 1).iter().all(|&v| v == 255));
+        assert_eq!(scale_table(&base, 0), scale_table(&base, 1));
+        assert_eq!(scale_table(&base, 200), scale_table(&base, 100));
+    }
+}

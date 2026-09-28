@@ -147,4 +147,10 @@ mod tests {
         assert_ne!(enc, samples);
         assert_eq!(enc.len(), samples.len());
     }
+
+    #[test]
+    fn bad_png_row_returns_none() {
+        assert!(decode_png(&[9, 1, 2, 3], 1, 1).is_none());
+        assert!(decode_png(&[0, 1], 2, 1).is_none());
+    }
 }

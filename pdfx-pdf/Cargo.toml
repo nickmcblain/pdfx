@@ -11,3 +11,6 @@ pdfx-jpeg.workspace = true
 pdfx-percept.workspace = true
 thiserror.workspace = true
 zune-jpeg.workspace = true
+
+[dev-dependencies]
+lopdf.workspace = true
