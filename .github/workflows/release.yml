@@ -1,0 +1,113 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            asset: pdfx-linux-x64.tar.gz
+          - os: macos-latest
+            asset: pdfx-macos.dmg
+          - os: windows-latest
+            asset: pdfx-windows-x64.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        if: runner.os == 'Linux'
+        run: cargo test --workspace
+
+      - name: Build (Linux, Windows)
+        if: runner.os != 'macOS'
+        run: cargo build --release -p pdfx-gui
+
+      - name: Package Linux
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist/pdfx
+          cp target/release/pdfx-gui dist/pdfx/pdfx-gui
+          tar -C dist -czf "dist/${{ matrix.asset }}" pdfx
+
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir dist
+          cp target/release/pdfx-gui.exe "dist/${{ matrix.asset }}"
+
+      - name: Build and package macOS
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build --release -p pdfx-gui --target "$target"
+          done
+          VERSION="${GITHUB_REF_NAME#v}"
+          case "$VERSION" in [0-9]*) ;; *) VERSION=0.0.0 ;; esac
+          APP=dist/dmgroot/pdfx.app
+          mkdir -p "$APP/Contents/MacOS"
+          lipo -create \
+            target/aarch64-apple-darwin/release/pdfx-gui \
+            target/x86_64-apple-darwin/release/pdfx-gui \
+            -output "$APP/Contents/MacOS/pdfx"
+          cat > "$APP/Contents/Info.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>pdfx</string>
+            <key>CFBundleDisplayName</key><string>pdfx</string>
+            <key>CFBundleIdentifier</key><string>io.github.nickmcblain.pdfx</string>
+            <key>CFBundleExecutable</key><string>pdfx</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleVersion</key><string>${VERSION}</string>
+            <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+            <key>LSMinimumSystemVersion</key><string>11.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+            <key>CFBundleDocumentTypes</key>
+            <array><dict>
+              <key>CFBundleTypeName</key><string>PDF</string>
+              <key>CFBundleTypeRole</key><string>Viewer</string>
+              <key>LSItemContentTypes</key><array><string>com.adobe.pdf</string></array>
+            </dict></array>
+          </dict>
+          </plist>
+          EOF
+          codesign --force --sign - "$APP"
+          ln -s /Applications dist/dmgroot/Applications
+          hdiutil create -volname pdfx -srcfolder dist/dmgroot -ov -format UDZO "dist/${{ matrix.asset }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

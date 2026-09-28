@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>pdfx: shrink PDFs and add fillable fields</title>
+  <meta name="description" content="Drop in a PDF, choose what to do, chain steps together. A free desktop app for macOS, Windows, and Linux. Nothing else to install.">
+  <style>
+    :root {
+      --bg: #ffffff; --fg: #14161a; --muted: #5b6270; --line: #e3e6eb;
+      --card: #f6f7f9; --accent: #2f5bea; --accent-fg: #ffffff;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #101215; --fg: #eceef2; --muted: #9aa2b1; --line: #262a31;
+        --card: #171a1f; --accent: #6d8dff; --accent-fg: #0b0d12;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--fg);
+      font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    a { color: var(--accent); }
+    .wrap { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+    header { display: flex; justify-content: space-between; align-items: center; padding: 20px 0; }
+    header strong { font-size: 20px; letter-spacing: -0.02em; }
+    header a { color: var(--muted); text-decoration: none; font-size: 15px; }
+    .hero { text-align: center; padding: 56px 0 40px; }
+    h1 { font-size: clamp(32px, 6vw, 52px); line-height: 1.1; letter-spacing: -0.03em; margin: 0 0 16px; }
+    .lede { font-size: 19px; color: var(--muted); max-width: 620px; margin: 0 auto 32px; }
+    .button {
+      display: inline-block; background: var(--accent); color: var(--accent-fg);
+      padding: 14px 28px; border-radius: 10px; font-weight: 600; font-size: 18px; text-decoration: none;
+    }
+    .button:hover { filter: brightness(1.08); }
+    .others { margin-top: 16px; font-size: 14px; color: var(--muted); }
+    .others a { margin: 0 6px; }
+    .shot { margin: 40px auto 0; max-width: 760px; }
+    .shot img { width: 100%; height: auto; border-radius: 12px; border: 1px solid var(--line); display: block; }
+    section { padding: 48px 0; border-top: 1px solid var(--line); }
+    h2 { font-size: 28px; letter-spacing: -0.02em; margin: 0 0 24px; }
+    .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px; }
+    .card h3 { margin: 0 0 8px; font-size: 18px; }
+    .card p { margin: 0 0 12px; color: var(--muted); font-size: 15px; }
+    .card p:last-child { margin-bottom: 0; }
+    .card .button { font-size: 15px; padding: 10px 18px; }
+    ol.steps { padding-left: 20px; margin: 0; }
+    ol.steps li { margin-bottom: 8px; }
+    .note { color: var(--muted); font-size: 14px; }
+    code { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; font-size: 14px; }
+    footer { border-top: 1px solid var(--line); padding: 32px 0 48px; color: var(--muted); font-size: 14px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <strong>pdfx</strong>
+      <a href="https://github.com/nickmcblain/pdfx">GitHub</a>
+    </header>
+
+    <main>
+      <div class="hero">
+        <h1>Shrink PDFs. Add fillable fields.<br>No terminal needed.</h1>
+        <p class="lede">Drop in a PDF, choose what to do with it, and chain as many steps as you like. It runs on your computer and your files never leave it.</p>
+        <a class="button" id="primary" href="#download">Download</a>
+        <div class="others" id="others">
+          Also for:
+          <a data-os="mac" href="https://github.com/nickmcblain/pdfx/releases/latest/download/pdfx-macos.dmg">macOS</a>
+          <a data-os="windows" href="https://github.com/nickmcblain/pdfx/releases/latest/download/pdfx-windows-x64.exe">Windows</a>
+          <a data-os="linux" href="https://github.com/nickmcblain/pdfx/releases/latest/download/pdfx-linux-x64.tar.gz">Linux</a>
+        </div>
+        <div class="shot"><img src="screenshot.png" alt="The pdfx window with a drop area and a list of steps"></div>
+      </div>
+
+      <section>
+        <h2>How it works</h2>
+        <ol class="steps">
+          <li>Drop a PDF onto the window, or press Open PDF.</li>
+          <li>Add the steps you want: inspect, compress, prepare form. Use Up and Down to set the order, and add the same step twice if you like.</li>
+          <li>Press Run. Each step works on the file the previous step made.</li>
+          <li>Press Save PDF to keep the result. Your original is never changed.</li>
+        </ol>
+      </section>
+
+      <section>
+        <h2>What the steps do</h2>
+        <div class="grid">
+          <div class="card">
+            <h3>Compress</h3>
+            <p>Removes unused data and squeezes large photos. The result never comes out bigger: if it would not be smaller, you get the original back.</p>
+          </div>
+          <div class="card">
+            <h3>Prepare form</h3>
+            <p>Finds underlines, empty boxes, and checkboxes on a flat page and turns them into real fields you can type into, named from the text beside them.</p>
+          </div>
+          <div class="card">
+            <h3>Inspect</h3>
+            <p>Shows the page count, object count, and file size so you can see what a step changed.</p>
+          </div>
+        </div>
+        <p class="note">Password-protected PDFs are refused and nothing is ever decrypted.</p>
+      </section>
+
+      <section id="download">
+        <h2>Download</h2>
+        <div class="grid">
+          <div class="card">
+            <h3>macOS</h3>
+            <p>Works on Apple Silicon and Intel, macOS 11 or newer.</p>
+            <p><a class="button" href="https://github.com/nickmcblain/pdfx/releases/latest/download/pdfx-macos.dmg">Download .dmg</a></p>
+            <p>Open the file and drag pdfx to Applications. The app is not yet signed with an Apple developer ID, so the first time, right-click pdfx and choose Open, then Open again.</p>
+          </div>
+          <div class="card">
+            <h3>Windows</h3>
+            <p>Windows 10 or newer, 64-bit.</p>
+            <p><a class="button" href="https://github.com/nickmcblain/pdfx/releases/latest/download/pdfx-windows-x64.exe">Download .exe</a></p>
+            <p>Double-click to run. There is nothing to install. If Windows shows a blue "protected your PC" box, choose More info, then Run anyway.</p>
+          </div>
+          <div class="card">
+            <h3>Linux</h3>
+            <p>Any 64-bit desktop with X11 or Wayland.</p>
+            <p><a class="button" href="https://github.com/nickmcblain/pdfx/releases/latest/download/pdfx-linux-x64.tar.gz">Download .tar.gz</a></p>
+            <p>Extract it, then open the <code>pdfx-gui</code> file inside. If your file manager only opens it as text, run it from the file's properties and allow "Run as a program".</p>
+          </div>
+        </div>
+        <p class="note">Each download is a single self-contained app. There is no Rust, Python, or other software to install first. All versions are on the <a href="https://github.com/nickmcblain/pdfx/releases">releases page</a>.</p>
+      </section>
+    </main>
+
+    <footer>
+      pdfx is free and open source under the MIT license. Prefer the terminal? The same steps are available as the <code>pdfx</code> command; see the <a href="https://github.com/nickmcblain/pdfx#readme">README</a>.
+    </footer>
+  </div>
+
+  <script>
+    (function () {
+      var ua = navigator.userAgent || "";
+      var platform = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "";
+      var text = (platform + " " + ua).toLowerCase();
+      var os = /android|iphone|ipad|ipod/.test(text) ? null
+        : /mac/.test(text) ? "mac"
+        : /win/.test(text) ? "windows"
+        : /linux|x11|cros/.test(text) ? "linux"
+        : null;
+      if (!os) return;
+      var names = { mac: "macOS", windows: "Windows", linux: "Linux" };
+      var links = document.querySelectorAll("#others a");
+      var primary = document.getElementById("primary");
+      for (var i = 0; i < links.length; i++) {
+        if (links[i].getAttribute("data-os") === os) {
+          primary.href = links[i].href;
+          primary.textContent = "Download for " + names[os];
+          links[i].style.display = "none";
+        }
+      }
+    })();
+  </script>
+</body>
+</html>

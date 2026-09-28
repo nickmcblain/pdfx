@@ -36,7 +36,7 @@ No `-o` on `compress` writes `deck.pdfx.pdf` next to the input. No `-o` on `form
 cargo run -p pdfx-gui
 ```
 
-On Linux the build needs `libgtk-3-dev`, `libxcb`, and `libxkbcommon` (including `libxkbcommon-x11`).
+Ready-made downloads for macOS, Windows, and Linux are on the [landing page](https://nickmcblain.github.io/pdfx/) and the [releases page](https://github.com/nickmcblain/pdfx/releases/latest). Nothing else needs installing. On Linux the window uses the desktop's own X11 or Wayland libraries, which every desktop install already has.
 
 ## What it does
 
